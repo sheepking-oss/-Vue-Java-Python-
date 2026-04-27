@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from typing import List
+import logging
 
 from app.models.contract_model import (
     ContractAnalysisRequest,
@@ -7,54 +8,176 @@ from app.models.contract_model import (
     KeyInfoItem,
     RiskItem,
     ExtractKeyInfoResponse,
-    CheckRiskResponse
+    CheckRiskResponse,
+    TaskValidationRequest,
+    TaskValidationResponse
 )
 from app.services.key_info_extractor import KeyInfoExtractor
 from app.services.risk_checker import RiskChecker
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 key_info_extractor = KeyInfoExtractor()
 risk_checker = RiskChecker()
 
+def parse_task_id_from_contract_id(task_id: str) -> int:
+    """从任务ID中提取合同ID，用于本地校验"""
+    try:
+        if task_id and task_id.startswith("CT-"):
+            parts = task_id.split("-")
+            if len(parts) >= 2:
+                return int(parts[1])
+    except (ValueError, IndexError) as e:
+        logger.warning(f"Failed to parse contractId from taskId: {task_id}, error: {e}")
+    return -1
+
+def validate_task_locally(request: ContractAnalysisRequest) -> bool:
+    """
+    本地校验任务绑定关系
+    任务ID格式: CT-{contractId}-V{versionNo}-{random}
+    例如: CT-123-V1-ABC123DEF456
+    """
+    if request.taskId is None or request.contractId is None:
+        return True
+    
+    parsed_contract_id = parse_task_id_from_contract_id(request.taskId)
+    
+    if parsed_contract_id == -1:
+        logger.warning(f"Could not parse contractId from taskId: {request.taskId}")
+        return True
+    
+    if parsed_contract_id != request.contractId:
+        logger.error(f"Task binding validation failed! taskId={request.taskId}, "
+                    f"parsedContractId={parsed_contract_id}, requestContractId={request.contractId}")
+        return False
+    
+    logger.info(f"Task binding validation passed: taskId={request.taskId}, contractId={request.contractId}")
+    return True
+
 @router.post("/extract", response_model=ExtractKeyInfoResponse)
 async def extract_key_info(request: ContractAnalysisRequest):
     try:
+        logger.info(f"Received extract request: taskId={request.taskId}, contractId={request.contractId}")
+        
+        if not validate_task_locally(request):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"任务绑定关系校验失败: taskId={request.taskId}, contractId={request.contractId}"
+            )
+        
         key_info = key_info_extractor.extract(request.content)
         
-        return ExtractKeyInfoResponse(
+        response = ExtractKeyInfoResponse(
             success=True,
+            taskId=request.taskId,
+            contractId=request.contractId,
+            versionNo=request.versionNo,
             data=key_info
         )
+        
+        logger.info(f"Extract completed: taskId={request.taskId}, keyInfoCount={len(key_info)}")
+        return response
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Extract failed: taskId={request.taskId}, error={str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/risk", response_model=CheckRiskResponse)
 async def check_risk(request: ContractAnalysisRequest):
     try:
+        logger.info(f"Received risk check request: taskId={request.taskId}, contractId={request.contractId}")
+        
+        if not validate_task_locally(request):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"任务绑定关系校验失败: taskId={request.taskId}, contractId={request.contractId}"
+            )
+        
         risks = risk_checker.check(request.content)
         
-        return CheckRiskResponse(
+        response = CheckRiskResponse(
             success=True,
+            taskId=request.taskId,
+            contractId=request.contractId,
+            versionNo=request.versionNo,
             data=risks
         )
+        
+        logger.info(f"Risk check completed: taskId={request.taskId}, riskCount={len(risks)}")
+        return response
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Risk check failed: taskId={request.taskId}, error={str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/full", response_model=ContractAnalysisResponse)
 async def full_analysis(request: ContractAnalysisRequest):
     try:
+        logger.info(f"Received full analysis request: taskId={request.taskId}, contractId={request.contractId}")
+        
+        if not validate_task_locally(request):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"任务绑定关系校验失败: taskId={request.taskId}, contractId={request.contractId}"
+            )
+        
         key_info = key_info_extractor.extract(request.content)
         risks = risk_checker.check(request.content)
         
-        return ContractAnalysisResponse(
+        response = ContractAnalysisResponse(
             success=True,
+            taskId=request.taskId,
+            contractId=request.contractId,
+            versionNo=request.versionNo,
             key_info=key_info,
             risks=risks,
             raw_content=request.content
         )
+        
+        logger.info(f"Full analysis completed: taskId={request.taskId}, "
+                   f"keyInfoCount={len(key_info)}, riskCount={len(risks)}")
+        return response
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Full analysis failed: taskId={request.taskId}, error={str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/validate", response_model=TaskValidationResponse)
+async def validate_task(request: TaskValidationRequest):
+    """
+    任务绑定关系校验端点
+    用于 Java 后端主动校验任务与合同的绑定关系
+    """
+    logger.info(f"Received validation request: taskId={request.taskId}, contractId={request.contractId}")
+    
+    parsed_contract_id = parse_task_id_from_contract_id(request.taskId)
+    
+    if parsed_contract_id == -1:
+        return TaskValidationResponse(
+            valid=False,
+            taskId=request.taskId,
+            contractId=request.contractId,
+            message=f"无法从任务ID中解析合同ID: {request.taskId}"
+        )
+    
+    if parsed_contract_id != request.contractId:
+        return TaskValidationResponse(
+            valid=False,
+            taskId=request.taskId,
+            contractId=request.contractId,
+            message=f"合同ID不匹配: 任务ID中的合同ID={parsed_contract_id}, 请求的合同ID={request.contractId}"
+        )
+    
+    return TaskValidationResponse(
+        valid=True,
+        taskId=request.taskId,
+        contractId=request.contractId,
+        message="校验通过"
+    )
 
 @router.get("/demo/extract", response_model=ExtractKeyInfoResponse)
 async def demo_extract():
@@ -82,7 +205,7 @@ async def demo_extract():
 
     第四条 违约责任
     1. 如甲方逾期付款，每逾期一日，应向乙方支付逾期金额0.1%的违约金；
-    2. 如乙方逾期交付软件，每逾期一日，应向甲方支付合同金额0.1%的违约金；
+    2. 如乙方逾期交付软件，每逾期一日，应向乙方支付合同金额0.1%的违约金；
     3. 如乙方交付的软件不符合合同约定，甲方有权解除合同，并要求乙方退还已收款项。
 
     第五条 争议解决
@@ -105,6 +228,9 @@ async def demo_extract():
     
     return ExtractKeyInfoResponse(
         success=True,
+        taskId="CT-DEMO-V1-001",
+        contractId=1,
+        versionNo=1,
         data=key_info
     )
 
@@ -139,5 +265,8 @@ async def demo_risk():
     
     return CheckRiskResponse(
         success=True,
+        taskId="CT-DEMO-V1-001",
+        contractId=1,
+        versionNo=1,
         data=risks
     )
