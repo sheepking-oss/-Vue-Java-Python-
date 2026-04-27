@@ -10,6 +10,7 @@ import com.contract.entity.*;
 import com.contract.mapper.*;
 import com.contract.modules.approval.service.ApprovalService;
 import com.contract.modules.contract.service.ContractService;
+import com.contract.modules.contract.service.ContractVersionApprovalService;
 import com.contract.utils.SecurityUtils;
 import com.contract.vo.ContractVO;
 import org.springframework.beans.BeanUtils;
@@ -44,6 +45,9 @@ public class ContractServiceImpl implements ContractService {
 
     @Autowired
     private ApprovalService approvalService;
+
+    @Autowired
+    private ContractVersionApprovalService versionApprovalService;
 
     @Value("${file.upload.path}")
     private String uploadPath;
@@ -137,9 +141,28 @@ public class ContractServiceImpl implements ContractService {
             throw new BusinessException("只能提交草稿状态或退回状态的合同");
         }
 
-        approvalService.startApproval(id, "contract", "合同审批：" + contract.getContractName(), null);
+        Integer currentVersion = contract.getCurrentVersion();
+        if (currentVersion == null) {
+            currentVersion = 1;
+        }
+
+        if (contract.getStatus() == Contract.STATUS_RETURNED) {
+            ContractVersion newVersion = versionApprovalService.createNewVersionFromReturn(
+                    id, "退回修改后重新提交审批");
+            currentVersion = newVersion.getVersionNo();
+        }
+
+        String instanceName = "合同审批（V" + currentVersion + "）：" + contract.getContractName();
+
+        ApprovalInstance approvalInstance = approvalService.startApproval(
+                id, "contract", instanceName, null);
+
+        approvalInstance.setContractVersionNo(currentVersion);
+
+        versionApprovalService.bindVersionWithApproval(id, currentVersion, approvalInstance.getId());
 
         contract.setStatus(Contract.STATUS_APPROVING);
+        contract.setApprovalVersionNo(currentVersion);
         contractMapper.updateById(contract);
     }
 
@@ -215,9 +238,15 @@ public class ContractServiceImpl implements ContractService {
             throw new BusinessException("文件上传失败：" + e.getMessage());
         }
 
+        Integer currentVersion = contract.getCurrentVersion();
+        if (currentVersion == null) {
+            currentVersion = 1;
+        }
+
         ContractAttachment attachment = new ContractAttachment();
         attachment.setContractId(contractId);
         attachment.setVersionId(null);
+        attachment.setVersionNo(currentVersion);
         attachment.setFileName(originalFilename);
         attachment.setFilePath(relativePath);
         attachment.setFileSize(file.getSize());
@@ -234,7 +263,17 @@ public class ContractServiceImpl implements ContractService {
 
     @Override
     public List<ContractAttachment> getAttachments(Long contractId) {
-        return attachmentMapper.selectByContractId(contractId);
+        Contract contract = contractMapper.selectById(contractId);
+        if (contract == null) {
+            throw new BusinessException("合同不存在");
+        }
+
+        Integer currentVersion = contract.getCurrentVersion();
+        if (currentVersion == null) {
+            currentVersion = 1;
+        }
+
+        return versionApprovalService.getVersionAttachments(contractId, currentVersion);
     }
 
     @Override
