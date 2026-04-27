@@ -15,6 +15,7 @@ public class ApprovalComment {
     private Long id;
     private Long instanceId;
     private Long nodeId;
+    private Integer contractVersionNo;
     private Long approverId;
     private String approverName;
     private Integer actionType;

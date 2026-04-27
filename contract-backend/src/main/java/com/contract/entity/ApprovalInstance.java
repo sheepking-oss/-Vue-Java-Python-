@@ -16,6 +16,7 @@ public class ApprovalInstance {
     private Long id;
     private Long businessId;
     private String businessType;
+    private Integer contractVersionNo;
     private Long flowId;
     private String instanceName;
     private Long currentNodeId;
