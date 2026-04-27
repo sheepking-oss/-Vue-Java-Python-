@@ -7,6 +7,7 @@ import com.contract.entity.*;
 import com.contract.mapper.*;
 import com.contract.modules.approval.service.ApprovalService;
 import com.contract.modules.contract.service.ContractService;
+import com.contract.modules.contract.service.ContractVersionApprovalService;
 import com.contract.utils.SecurityUtils;
 import com.contract.vo.ApprovalActionVO;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,6 +42,9 @@ public class ApprovalServiceImpl implements ApprovalService {
     @Autowired
     private ContractService contractService;
 
+    @Autowired
+    private ContractVersionApprovalService versionApprovalService;
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ApprovalInstance startApproval(Long businessId, String businessType, String instanceName, Long flowId) {
@@ -64,9 +68,21 @@ public class ApprovalServiceImpl implements ApprovalService {
 
         nodes.sort(Comparator.comparingInt(ApprovalNode::getSort));
 
+        Integer contractVersionNo = null;
+        if ("contract".equals(businessType)) {
+            Contract contract = contractMapper.selectById(businessId);
+            if (contract != null) {
+                contractVersionNo = contract.getCurrentVersion();
+                if (contractVersionNo == null) {
+                    contractVersionNo = 1;
+                }
+            }
+        }
+
         ApprovalInstance instance = new ApprovalInstance();
         instance.setBusinessId(businessId);
         instance.setBusinessType(businessType);
+        instance.setContractVersionNo(contractVersionNo);
         instance.setFlowId(flowId);
         instance.setInstanceName(instanceName);
         instance.setStatus(ApprovalInstance.STATUS_APPROVING);
@@ -90,6 +106,7 @@ public class ApprovalServiceImpl implements ApprovalService {
             ApprovalInstanceNode instanceNode = new ApprovalInstanceNode();
             instanceNode.setInstanceId(instance.getId());
             instanceNode.setNodeId(node.getId());
+            instanceNode.setContractVersionNo(contractVersionNo);
             instanceNode.setNodeName(node.getNodeName());
             instanceNode.setNodeType(node.getNodeType());
             instanceNode.setSort(node.getSort());
@@ -131,6 +148,12 @@ public class ApprovalServiceImpl implements ApprovalService {
 
     @Override
     public ApprovalInstance getByBusinessId(Long businessId, String businessType) {
+        if ("contract".equals(businessType)) {
+            ContractVersionApproval versionApproval = versionApprovalService.getCurrentVersionApproval(businessId);
+            if (versionApproval != null) {
+                return instanceMapper.selectById(versionApproval.getInstanceId());
+            }
+        }
         return instanceMapper.selectByBusinessId(businessId, businessType);
     }
 
@@ -175,6 +198,7 @@ public class ApprovalServiceImpl implements ApprovalService {
         ApprovalComment comment = new ApprovalComment();
         comment.setInstanceId(instance.getId());
         comment.setNodeId(currentNode.getNodeId());
+        comment.setContractVersionNo(instance.getContractVersionNo());
         comment.setApproverId(userId);
         comment.setActionType(actionVO.getActionType());
         comment.setComment(actionVO.getComment());
@@ -273,6 +297,7 @@ public class ApprovalServiceImpl implements ApprovalService {
 
         ApprovalComment comment = new ApprovalComment();
         comment.setInstanceId(instance.getId());
+        comment.setContractVersionNo(instance.getContractVersionNo());
         comment.setApproverId(userId);
         comment.setActionType(ApprovalComment.ACTION_WITHDRAW);
         comment.setComment("发起人撤回审批");

@@ -16,6 +16,7 @@ public class ContractAttachment {
     private Long id;
     private Long contractId;
     private Long versionId;
+    private Integer versionNo;
     private String fileName;
     private String filePath;
     private Long fileSize;

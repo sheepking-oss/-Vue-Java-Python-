@@ -26,6 +26,7 @@ public class Contract extends BaseEntity {
     private LocalDate signDate;
     private String contractContent;
     private Integer currentVersion;
+    private Integer approvalVersionNo;
     private Integer status;
     private Long deptId;
 

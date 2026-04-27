@@ -15,6 +15,7 @@ public class ApprovalInstanceNode {
     private Long id;
     private Long instanceId;
     private Long nodeId;
+    private Integer contractVersionNo;
     private String nodeName;
     private Integer nodeType;
     private Integer sort;
